@@ -1,4 +1,5 @@
 name: CI/CD — todo-discovery-service
+
 on:
   push:
     branches: [ main ]
@@ -6,11 +7,11 @@ on:
     branches: [ main ]
 
 env:
-  AWS_REGION: ap-south-1
-  ECR_REPOSITORY: todo-discovery-service
+  IMAGE_NAME: todo-discovery-service
   IMAGE_TAG: ${{ github.sha }}
 
 jobs:
+  # ── JOB 1: Build & Test ─────────────────────────────────────────
   test:
     name: Build & Test
     runs-on: ubuntu-latest
@@ -23,102 +24,40 @@ jobs:
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: maven          # Caches ~/.m2 between runs — faster builds
+          cache: maven
 
       - name: Run tests
         run: mvn clean verify -B
 
       - name: Upload test results
-        if: always()            # Upload even if tests fail — see what broke
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: target/surefire-reports/
 
+  # ── JOB 2: Build & Push Docker Image ────────────────────────────
   build-and-push:
-    name: Build Docker & Push to ECR
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
-    needs: test                 # Only runs if tests PASS
-    if: github.ref == 'refs/heads/main'  # Only on main branch (not PRs)
+    needs: test
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-          # These secrets are set in GitHub → Settings → Secrets and variables
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-        # This action automatically gets the ECR login token and runs docker login
-
-      - name: Build Docker image
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          docker build \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
-            .
-          # Two tags:
-          # :$IMAGE_TAG (git SHA) — immutable, used for rollback
-          # :latest       — always points to newest, used in dev
-
-      - name: Push image to ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
-
-      - name: Save image URI as output
-        run: |
-          echo "IMAGE=${{ steps.login-ecr.outputs.registry }}/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
-
-  # ── JOB 3: Deploy to Kubernetes ───────────────────────────────────
-  deploy:
-    name: Deploy to EKS
-    runs-on: ubuntu-latest
-    needs: build-and-push       # Only runs after image is pushed
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+      - name: Build and push to Docker Hub
+        uses: docker/build-push-action@v5
         with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Update kubeconfig for EKS
-        run: |
-          aws eks update-kubeconfig \
-            --region $AWS_REGION \
-            --name todo-eks-cluster
-          # Writes ~/.kube/config so kubectl works against your EKS cluster
-
-      - name: Update image in deployment
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          kubectl set image deployment/todo-discovery-service \
-            todo-discovery-service=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
-            -n todo
-          # Updates only the image — no other config changes
-          # K8s does a rolling update automatically (zero downtime)
-
-      - name: Wait for rollout
-        run: |
-          kubectl rollout status deployment/todo-discovery-service \
-            -n todo \
-            --timeout=120s
-          # Fails the pipeline if deployment doesn't succeed in 2 min
-          # This means CI/CD catches broken deployments immediately
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:latest
