@@ -1,0 +1,8 @@
+# Dev profile — fast feedback, verbose logging
+eureka:
+  server:
+    # When a service crashes locally, remove it from registry immediately
+    # (default 90s wait is annoying in dev)
+    eviction-interval-timer-in-ms: 5000
+    enable-self-preservation: false  # Don't warn about low heartbeats locally
+
