@@ -1,5 +1,5 @@
 # ── Stage 1: BUILD ──────────────────────────────────────────────
-FROM maven:3.9.6-eclipse-temurin-17 AS builder
+FROM maven:3.9.6-eclipse-temurin-21 AS builder
 
 WORKDIR /app
 
@@ -13,14 +13,14 @@ COPY src ./src
 RUN mvn clean package -DskipTests -B
 
 # ── Stage 2: RUNTIME ────────────────────────────────────────────
-FROM eclipse-temurin:17-jre-alpine
+FROM eclipse-temurin:21-jre-alpine
 
 WORKDIR /app
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 USER appuser
 
-# Copy ONLY the JAR from builder stage
+
 COPY --from=builder /app/target/*.jar app.jar
 
 EXPOSE 8761
